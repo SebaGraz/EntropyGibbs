@@ -22,6 +22,11 @@ function samplemixtue(N, μ)
 end
 obs, kk = samplemixtue(Nobs, μtrue)
 
+struct Prior
+    μ0::Float64
+    σ20::Float64
+    π0::Vector{Float64}
+end
 
 
 struct Entropy
@@ -32,7 +37,7 @@ end
 
 
 
-function gibbs(x, z0, μ0, Niter; version = :standard)
+function gibbs(x, z0, μ0, Niter, P0::Prior; version = :standard)
     if version == :standard 
         println("Standard gibbs") 
     elseif version == :adapt 
@@ -51,8 +56,8 @@ function gibbs(x, z0, μ0, Niter; version = :standard)
     z = copy(z0)
     μ = copy(μ0)
     for i in 2:Niter
-        z = gibbsZ!(E, x, z, μ, i, version)
-        μ = gibbsμ!(x, z, μ)
+        z = gibbsZ!(P0, E, x, z, μ, i, version)
+        μ = gibbsμ!(P0, x, z, μ)
         zz[i] = copy(z)
         mm[i] = copy(μ)
     end
@@ -60,15 +65,15 @@ function gibbs(x, z0, μ0, Niter; version = :standard)
 end
 
 
-function gibbsZ!(E::Entropy, x, z, μ, i, version)
+function gibbsZ!(P::Prior, E::Entropy, x, z, μ, i, version)
     p = E.p
     if version == :adapt 
-        (i%100 ==0  && i > 500) == 0
-        E = update_p!(E, i)
+        (i%1000 ==0  && i > 500) == 0
+        E = update_p!(E, i) # update probabilities to select each individual
     end
     j = sample(Weights(p))  # not efficient, see ?sample. For improving: see https://github.com/TuringLang/AdvancedPS.jl/blob/master/src/resampling.jl
     E = update_row!(E, j, x, μ)
-    z[j] = sample(Weights(E.M[j,:]))
+    z[j] = sample(Weights(E.M[j,:].*P.π0))
     return z
 end
 
@@ -87,12 +92,14 @@ function update_row!(E, j, x, μ) # update allocation matrix
 end
 
 
-function gibbsμ!(x, z, μ) 
+function gibbsμ!(P::Prior, x, z, μ) 
     for i ∈ eachindex(μ)
         ind = z .== i
         xind = x[ind]
         tot = sum(ind)
-        μ[i] = randn()/sqrt(tot) + sum(xind)/tot   ### TO CHECK μ_i | z  = 𝒩(xbar, 1/nbar) xbar = ∑_j x_J 1(z_j = i) 
+        prec = tot + 1/P.σ20
+        m = (sum(xind) + P.μ0/P.σ20)/prec
+        μ[i] = randn()/sqrt(prec) + m 
     end
     return μ
 end
@@ -132,10 +139,11 @@ elseif initialization == :true
 else
     error("please specify initialization")
 end
-Niter = 100000
-version =  :adapt 
+Niter = 10^5
+version =  :adapt
 # version = :standard
-@time trace = gibbs(obs, z0, μ0, Niter, version = version)
+P0 = Prior(0.0, 100.0, [1/3, 1/3, 1/3])
+@time trace = gibbs(obs, z0, μ0, Niter, P0, version = version)
 zz, mm = trace
 
 
